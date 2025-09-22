@@ -1,3 +1,13 @@
+@app.post("/webhook")
+def webhook():
+    from twilio.twiml.messaging_response import MessagingResponse
+    incoming = request.values.get("Body", "") or ""
+    print(">>> Llego WhatsApp:", incoming, flush=True)
+
+    # HOTFIX: responde siempre rápido para probar conectividad
+    resp = MessagingResponse()
+    resp.message("✅ Vivo y escuchando: " + incoming[:60])
+    return str(resp), 200
 import os
 import re
 from datetime import datetime, timezone
