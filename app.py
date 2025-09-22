@@ -36,7 +36,12 @@ def webhook():
 
     elif incoming_msg.startswith("borrar nota "):
         try:
-            idx = int(incoming_msg.replace("borrar nota ", "", 1).strip()) - 1
+            idx = int(
+                incoming_msg.replace("borrar nota ", "")
+                                  .replace("eliminar nota","")
+                                  .replace("quitar nota,"")
+                                  .strip()
+            ) - 1
             res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
             if 0 <= idx < len(res.data):
                 note_id = res.data[idx]["id"]
