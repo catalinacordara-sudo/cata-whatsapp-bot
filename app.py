@@ -1,4 +1,4 @@
-@app.post("/webhook")
+@app.route("/webhook", methods=["POST"])
 def webhook():
     from twilio.twiml.messaging_response import MessagingResponse
     incoming = request.values.get("Body", "") or ""
