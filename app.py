@@ -14,7 +14,41 @@ def health():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "")
+    incoming_msg = request.values.get("Body", "").strip().lower()
+    resp = MessagingResponse()
+    reply = ""
+
+    if incoming_msg.startswith("nota "):
+        contenido = incoming_msg.replace("nota ", "", 1).strip()
+        if contenido:
+            supabase.table("notas").insert({"texto": contenido}).execute()
+            reply = f"✅ Nota guardada: {contenido}"
+        else:
+            reply = "⚠️ No escribiste nada después de 'nota'."
+
+    elif incoming_msg == "listar notas":
+        res = supabase.table("notas").select("*").order("created_at", desc=False).execute()
+        if res.data:
+            notas = [f"{i+1}. {n['texto']}" for i, n in enumerate(res.data)]
+            reply = "📝 Tus notas:\n" + "\n".join(notas)
+        else:
+            reply = "No tienes notas todavía."
+
+    elif incoming_msg.startswith("borrar nota "):
+        try:
+            idx = int(incoming_msg.replace("borrar nota ", "", 1).strip()) - 1
+            res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
+            if 0 <= idx < len(res.data):
+                note_id = res.data[idx]["id"]
+                supabase.table("notas").delete().eq("id", note_id).execute()
+                reply = f"🗑️ Nota {idx+1} borrada."
+            else:
+                reply = "No existe esa nota."
+        except:
+            reply = "Formato: 'borrar nota 2'"
+
+    else:
+        reply = "👋 Hola, soy tu Catabot.\nPuedes usar:\n- 'nota <texto>' para guardar\n- 'listar notas' para verlas\n- 'borrar nota <número>' para borrar"
 
     try:
         reply_text = call_openai(incoming_msg)
