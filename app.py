@@ -14,12 +14,14 @@ def health():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
+    raw_msg = request.values.get("Body", "").strip()
+    incoming_msg = raw_msg.lower()
     resp = MessagingResponse()
     reply = ""
 
+    # --------- NOTAS ----------
     if incoming_msg.startswith("nota "):
-        contenido = incoming_msg.replace("nota ", "", 1).strip()
+        contenido = raw_msg[5:].strip()  # guarda respetando mayúsculas
         if contenido:
             supabase.table("notas").insert({"texto": contenido}).execute()
             reply = f"✅ Nota guardada: {contenido}"
@@ -34,37 +36,40 @@ def webhook():
         else:
             reply = "No tienes notas todavía."
 
-    elif incoming_msg.startswith("borrar nota "):
-        try:
-            idx = int(
-                incoming_msg.replace("borrar nota ", "")
-                                  .replace("eliminar nota","")
-                                  .replace("quitar nota,"")
-                                  .strip()
-            ) - 1
-            res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
-            if 0 <= idx < len(res.data):
-                note_id = res.data[idx]["id"]
-                supabase.table("notas").delete().eq("id", note_id).execute()
-                reply = f"🗑️ Nota {idx+1} borrada."
-            else:
-                reply = "No existe esa nota."
-        except:
-            reply = "Formato: 'borrar nota 2'"
-
-    else:
-        reply = "👋 Hola, soy tu Catabot.\nPuedes usar:\n- 'nota <texto>' para guardar\n- 'listar notas' para verlas\n- 'borrar nota <número>' para borrar"
-
+    elif (incoming_msg.startswith("borrar nota")
+      or incoming_msg.startswith("eliminar nota")
+      or incoming_msg.startswith("quitar nota")):
     try:
-        reply_text = call_openai(incoming_msg)
+        # Quita el prefijo detectado
+        idx_str = incoming_msg
+        for p in ["borrar nota", "eliminar nota", "quitar nota"]:
+            if idx_str.startswith(p):
+                idx_str = idx_str[len(p):]
+                break
+
+        idx = int(idx_str.strip()) - 1
+
+        # Busca el id real por posición (orden cronológico)
+        res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
+        if 0 <= idx < len(res.data):
+            note_id = res.data[idx]["id"]
+            supabase.table("notas").delete().eq("id", note_id).execute()
+            reply = f"🗑️ Nota {idx+1} borrada."
+        else:
+            reply = "❌ No existe esa nota."
     except Exception as e:
-        print("OpenAI error:", e, flush=True)
-        reply_text = "Ups, hubo un error al generar la respuesta. Intenta de nuevo más tarde."
+        reply = "Formato: 'borrar nota 2'"
+    # --------- FALLBACK IA ----------
+    else:
+        try:
+            reply = call_openai(raw_msg)
+        except Exception as e:
+            print("OpenAI error:", e, flush=True)
+            reply = "Ups, tuve un problema generando la respuesta."
 
-    resp = MessagingResponse()
-    resp.message(reply_text)
+    resp.message(reply)
     return str(resp), 200
-
+    
 def call_openai(user_text: str) -> str:
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
