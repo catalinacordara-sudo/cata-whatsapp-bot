@@ -9,6 +9,31 @@ def webhook():
     resp.message("✅ Vivo y escuchando: " + incoming[:60])
     return str(resp), 200
 import os
+from flask import Flask, request
+from twilio.twiml.messaging_response import MessagingResponse
+
+app = Flask(__name__)
+
+@app.get("/health")
+def health():
+    return "ok", 200
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    # texto entrante
+    incoming = request.values.get("Body", "") or ""
+    # log para revisar en Render
+    print("🟢 Llego WhatsApp:", incoming, flush=True)
+
+    # HOTFIX: responder muy rápido para probar conectividad
+    resp = MessagingResponse()
+    resp.message(f"Vivo y escuchando · {incoming.strip()[:60]}")
+    return str(resp), 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+
+import os
 import re
 from datetime import datetime, timezone
 from flask import Flask, request
