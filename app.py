@@ -48,3 +48,46 @@ def call_openai(user_text: str) -> str:
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+from flask import Flask, request
+from twilio.twiml.messaging_response import MessagingResponse
+from supabase import create_client
+import os
+
+app = Flask(__name__)
+
+# 🔑 Configuración Supabase (desde variables de entorno en Render)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    incoming_msg = request.values.get("Body", "").strip().lower()
+    resp = MessagingResponse()
+    reply = ""
+
+    if incoming_msg.startswith("nota "):
+        # ejemplo: "nota comprar café"
+        contenido = incoming_msg.replace("nota ", "", 1).strip()
+        if contenido:
+            supabase.table("notas").insert({"texto": contenido}).execute()
+            reply = f"✅ Nota guardada: {contenido}"
+        else:
+            reply = "⚠️ No escribiste nada después de 'nota'."
+
+    elif incoming_msg == "listar notas":
+        res = supabase.table("notas").select("*").execute()
+        if res.data:
+            notas = [f"{i+1}. {n['texto']}" for i, n in enumerate(res.data)]
+            reply = "📝 Tus notas:\n" + "\n".join(notas)
+        else:
+            reply = "No tienes notas todavía."
+
+    else:
+        reply = "👋 Hola, soy tu Catabot. Puedes usar:\n- 'nota <texto>' para guardar\n- 'listar notas' para verlas"
+
+    resp.message(reply)
+    return str(resp)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
