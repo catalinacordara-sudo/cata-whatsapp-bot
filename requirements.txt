@@ -1,5 +1,5 @@
 flask==3.0.3
-twilio==9.3.1
+twilio==9.2.3
 requests==2.32.2
-supabase
-gunicorn==21.2.0
+supabase==2.4.0
+gunicorn==23.0.0
