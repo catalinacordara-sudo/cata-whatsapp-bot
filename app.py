@@ -167,32 +167,32 @@ def webhook():
         incoming = request.values.get("Body", "").strip().lower()
         print("Mensaje entrante:", incoming)
 
-        if incoming == "ayuda":
-            resp.message("👋 Comandos disponibles:\n- nota <texto>\n- listar notas")
+        # 👇 Aquí pegas todos los if/elif que te pasé:
+        if incoming in ["ayuda", "help", "menu"]:
+            resp.message("👋 Comandos disponibles...\n...")
+
         elif incoming.startswith("nota "):
-            texto = incoming.replace("nota ", "").strip()
-            # guardar nota en Supabase
-            supabase.table("notas").insert({"texto": texto}).execute()
+            texto = incoming.replace("nota ", "", 1).strip()
+            supabase.table("nota").insert({"texto": texto}).execute()
             resp.message(f"✅ Nota guardada: {texto}")
-        elif incoming.startswith("listar notas"):
-            data = supabase.table("notas").select("*").order("id").execute()
-            rows = data.data
-            if not rows:
-                resp.message("📒 No tienes notas todavía.")
-            else:
-                msg = "📒 Tus notas:\n"
-                for r in rows:
-                    msg += f"{r['id']}. {r['texto']}\n"
-                resp.message(msg)
+
+        elif incoming == "listar notas":
+            # etc...
+
+        elif incoming.startswith("borrar nota"):
+            # etc...
+
+        elif incoming.startswith("editar nota"):
+            # etc...
+
         else:
-            resp.message("Hola 👋. Escribe 'ayuda' para ver comandos.")
+            resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
 
     except Exception as e:
         print("❌ Error en webhook:", e)
-        resp.message(f"⚠️ Error interno: {e}")
+        resp.message("⚠️ Error interno")
 
     return str(resp), 200
-
 
     # --------- Comandos ----------
     if mlow in ["ayuda", "help", "menu"]:
