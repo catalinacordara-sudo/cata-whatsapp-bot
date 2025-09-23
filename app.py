@@ -6,349 +6,245 @@ from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 from supabase import create_client
 
-# ------------------------
-# Config & Clients
-# ------------------------
+# ─────────────────────────────
+# Configuración
+# ─────────────────────────────
 app = Flask(__name__)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Falta SUPABASE_URL o SUPABASE_KEY en variables de entorno.")
+    raise RuntimeError("Faltan SUPABASE_URL y/o SUPABASE_KEY en variables de entorno.")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Utilidad: normalizar texto (para matching de comandos)
+# Helpers
 def norm(s: str) -> str:
-    return re.sub(r"\s+", " ", s or "").strip()
+    """Normaliza texto para matching de comandos."""
+    return (s or "").strip()
 
-# Extraer etiquetas tipo #compras #casa
-def extract_tags(text: str) -> list[str]:
-    return list({t[1:].lower() for t in re.findall(r"#\w+", text or "")})
+def list_to_bullets(rows, field="texto", titulo="Tus notas"):
+    if not rows:
+        return "🗒️ Aún sin notas."
+    return "🗒️ " + titulo + ":\n" + "\n".join([f"{i+1}. {r[field]}" for i, r in enumerate(rows)])
 
 HELP_TEXT = (
     "👋 *Comandos disponibles*\n"
-    "• *nota <texto>* — guarda una nota (puedes incluir #etiquetas)\n"
-    "• *listar notas* — ver todas (no archivadas)\n"
-    "• *listar #etiqueta* — ver por etiqueta\n"
-    "• *buscar [texto]* — buscar en tus notas\n"
-    "• *editar nota N: <nuevo texto>* — edita por número\n"
-    "• *borrar nota N* — elimina\n"
-    "• *archivar nota N* / *desarchivar nota N*\n"
-    "• *stats* — conteos\n"
-    "• *ayuda* — muestra este menú\n"
+    "nota <texto> — guarda una nota\n"
+    "listar notas — ver notas\n"
+    "borrar nota N — elimina por número\n"
+    "editar nota N: <nuevo texto> — edita por número\n"
+    "\n"
+    "recordatorio <texto> — guarda un recordatorio\n"
+    "listar recordatorios — ver recordatorios\n"
+    "borrar recordatorio N — elimina por número\n"
+    "editar recordatorio N: <nuevo texto> — edita por número\n"
 )
 
-# ------------------------
-# Helpers de BD
-# Tabla recomendada:
-# CREATE TABLE IF NOT EXISTS public.notas (
-#   id bigserial PRIMARY KEY,
-#   wa_id text NOT NULL,
-#   texto text NOT NULL,
-#   tags text[] DEFAULT '{}',
-#   archived boolean DEFAULT false,
-#   created_at timestamptz DEFAULT now()
-# );
-# CREATE INDEX IF NOT EXISTS notas_wa_id_created_idx ON public.notas(wa_id, created_at);
-# CREATE INDEX IF NOT EXISTS notas_tags_gin ON public.notas USING GIN (tags);
-# CREATE INDEX IF NOT EXISTS notas_texto_trgm ON public.notas USING GIN (texto gin_trgm_ops);
-# (Para el índice trgm: habilita extensión pg_trgm en Supabase SQL Editor: CREATE EXTENSION IF NOT EXISTS pg_trgm;)
-# ------------------------
-
-def list_notes(wa_id: str, only_active: bool = True):
-    q = supabase.table("notas").select("*").eq("wa_id", wa_id).order("created_at", desc=False)
-    if only_active:
-        q = q.eq("archived", False)
-    return q.execute().data or []
-
-def list_notes_by_tag(wa_id: str, tag: str):
-    # tags ? 'tag' (contiene) – Supabase REST usa filter en PostgREST:
-    # usamos 'contains' con array
-    return (
-        supabase.table("notas")
-        .select("*")
-        .eq("wa_id", wa_id)
-        .eq("archived", False)
-        .contains("tags", [tag.lower()])
-        .order("created_at", desc=False)
-        .execute()
-        .data
-        or []
-    )
-
-def search_notes(wa_id: str, query: str):
-    # Búsqueda simple con ilike
-    return (
-        supabase.table("notas")
-        .select("*")
-        .eq("wa_id", wa_id)
-        .eq("archived", False)
-        .ilike("texto", f"%{query}%")
-        .order("created_at", desc=False)
-        .execute()
-        .data
-        or []
-    )
-
-def insert_note(wa_id: str, texto: str):
-    tags = extract_tags(texto)
-    return (
-        supabase.table("notas")
-        .insert({"wa_id": wa_id, "texto": texto, "tags": tags})
-        .execute()
-        .data
-    )
-
-def update_note_text_by_index(wa_id: str, index_1_based: int, new_text: str):
-    data = list_notes(wa_id, only_active=True)
-    if not data or index_1_based < 1 or index_1_based > len(data):
-        return None, "No existe esa nota."
-    row = data[index_1_based - 1]
-    tags = extract_tags(new_text)
-    res = (
-        supabase.table("notas")
-        .update({"texto": new_text, "tags": tags})
-        .eq("id", row["id"])
-        .execute()
-        .data
-    )
-    return res, None
-
-def delete_note_by_index(wa_id: str, index_1_based: int):
-    data = list_notes(wa_id, only_active=True)
-    if not data or index_1_based < 1 or index_1_based > len(data):
-        return None, "No existe esa nota."
-    row = data[index_1_based - 1]
-    supabase.table("notas").delete().eq("id", row["id"]).execute()
-    return True, None
-
-def set_archived_by_index(wa_id: str, index_1_based: int, archived: bool):
-    data = list_notes(wa_id, only_active=not archived)  # si voy a archivar, miro activas; si desarchivar, miro archivadas
-    if archived:
-        data = list_notes(wa_id, only_active=True)
-    else:
-        # Para desarchivar, listar archivadas
-        data = (
-            supabase.table("notas")
-            .select("*")
-            .eq("wa_id", wa_id)
-            .eq("archived", True)
-            .order("created_at", desc=False)
-            .execute()
-            .data
-            or []
-        )
-    if not data or index_1_based < 1 or index_1_based > len(data):
-        return None, "No existe esa nota."
-    row = data[index_1_based - 1]
-    supabase.table("notas").update({"archived": archived}).eq("id", row["id"]).execute()
-    return True, None
-
-def format_notes(data):
-    if not data:
-        return "No tienes notas todavía."
-    lines = [f"{i+1}. {row['texto']}" for i, row in enumerate(data)]
-    return "\n".join(lines)
-
-# ------------------------
-# Webhook Twilio
-# ------------------------
+# ─────────────────────────────
+# Rutas
+# ─────────────────────────────
 @app.route("/", methods=["GET"])
 def root():
-    # Página de vida simple
+    # Página de vida sencilla
     return "Echo debug: ping"
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
 
     try:
-        incoming = request.values.get("Body", "").strip().lower()
-        print("Mensaje entrante:", incoming)
+        incoming = request.values.get("Body", "") or ""
+        text = norm(incoming).lower()
+        wa_from = request.values.get("From", "") or ""
+        # ID de usuario por WhatsApp (suficiente para separar tus datos)
+        wa_id = wa_from.replace("whatsapp:", "").strip()
 
-        # === AYUDA / MENU ===
-        if incoming in ("ayuda", "help", "menu"):
-            resp.message(
-                "👋 *Comandos disponibles*\n"
-                "*nota <texto>* — guarda una nota\n"
-                "*listar notas* — ver notas\n"
-                "*borrar nota N* — elimina por número\n"
-                "*editar nota N: <nuevo texto>* — edita por número"
+        # === AYUDA / MENÚ ===
+        if text in ("ayuda", "help", "menu"):
+            resp.message(HELP_TEXT)
+            return str(resp), 200
+
+        # =========================
+        #        NOTAS
+        # =========================
+        # Guardar nota
+        if text.startswith("nota "):
+            contenido = norm(incoming[5:])
+            if not contenido:
+                resp.message("⚠️ Escribe algo después de *nota*.")
+                return str(resp), 200
+
+            supabase.table("notas").insert({"user_id": wa_id, "texto": contenido}).execute()
+            resp.message(f"✅ Nota guardada: {contenido}")
+            return str(resp), 200
+
+        # Listar notas
+        if text in ("listar notas", "listar nota"):
+            res = (
+                supabase.table("notas")
+                .select("id, texto")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
             )
-            return str(resp), 200
-
-        # === GUARDAR NOTA ===
-        if incoming.startswith("nota "):
-            texto = incoming.replace("nota ", "", 1).strip()
-            supabase.table("notas").insert({"texto": texto}).execute()
-            resp.message(f"✅ Nota guardada: {texto}")
-            return str(resp), 200
-
-        # === LISTAR NOTAS ===
-        if incoming.startswith("listar notas"):
-            res = supabase.table("notas").select("id, texto").order("created_at").execute()
             rows = res.data or []
-            if not rows:
-                resp.message("📒 Aún sin notas.")
-            else:
-                lista = "\n".join([f"{i+1}. {r['texto']}" for i, r in enumerate(rows)])
-                resp.message(f"📒 Tus notas:\n{lista}")
+            resp.message(list_to_bullets(rows, "texto", "Tus notas"))
             return str(resp), 200
 
-        # === BORRAR NOTA ===
-        if incoming.startswith("borrar nota"):
-            idx_str = incoming.replace("borrar nota", "", 1).strip()
-            if not idx_str.isdigit():
+        # Borrar nota N
+        if text.startswith("borrar nota"):
+            n_str = norm(text.replace("borrar nota", "", 1))
+            if not n_str.isdigit():
                 resp.message("❌ Formato: *borrar nota N* (ej: borrar nota 2)")
                 return str(resp), 200
 
-            n = int(idx_str)
-            res = supabase.table("notas").select("id").order("created_at").execute()
+            res = (
+                supabase.table("notas")
+                .select("id")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
+            )
             rows = res.data or []
-            if not (1 <= n <= len(rows)):
+            n = int(n_str)
+            if n < 1 or n > len(rows):
                 resp.message("❌ Ese número de nota no existe.")
                 return str(resp), 200
 
-            note_id = rows[n-1]["id"]
+            note_id = rows[n - 1]["id"]
             supabase.table("notas").delete().eq("id", note_id).execute()
             resp.message(f"🗑️ Nota {n} borrada.")
             return str(resp), 200
 
-        # === EDITAR NOTA ===
-        if incoming.startswith("editar nota"):
-            partes = incoming.replace("editar nota", "", 1).strip().split(":", 1)
+        # Editar nota N: nuevo texto
+        if text.startswith("editar nota"):
+            resto = norm(incoming[len("editar nota") :])
+            partes = resto.split(":", 1)
             if len(partes) != 2:
                 resp.message("❌ Formato: *editar nota N: nuevo texto*")
                 return str(resp), 200
 
-            idx_str, nuevo_texto = partes[0].strip(), partes[1].strip()
-            if not idx_str.isdigit():
-                resp.message("❌ Número inválido.")
+            n_str, nuevo = norm(partes[0]), norm(partes[1])
+            if not n_str.isdigit() or not nuevo:
+                resp.message("❌ Formato: *editar nota N: nuevo texto*")
                 return str(resp), 200
 
-            n = int(idx_str)
-            res = supabase.table("notas").select("id").order("created_at").execute()
+            res = (
+                supabase.table("notas")
+                .select("id")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
+            )
             rows = res.data or []
-            if not (1 <= n <= len(rows)):
+            n = int(n_str)
+            if n < 1 or n > len(rows):
                 resp.message("❌ Ese número de nota no existe.")
                 return str(resp), 200
 
-            note_id = rows[n-1]["id"]
-            supabase.table("notas").update({"texto": nuevo_texto}).eq("id", note_id).execute()
-            resp.message(f"✏️ Nota {n} editada: {nuevo_texto}")
+            note_id = rows[n - 1]["id"]
+            supabase.table("notas").update({"texto": nuevo}).eq("id", note_id).execute()
+            resp.message(f"✍️ Nota {n} editada: {nuevo}")
             return str(resp), 200
 
-        # === SI NO ENTIENDE ===
+        # =========================
+        #     RECORDATORIOS
+        # =========================
+        # Guardar recordatorio
+        if text.startswith("recordatorio "):
+            contenido = norm(incoming[len("recordatorio "):])
+            if not contenido:
+                resp.message("⚠️ Escribe algo después de *recordatorio*.")
+                return str(resp), 200
+
+            supabase.table("recordatorios").insert({"user_id": wa_id, "texto": contenido}).execute()
+            resp.message(f"⏰ Recordatorio guardado: {contenido}")
+            return str(resp), 200
+
+        # Listar recordatorios
+        if text in ("listar recordatorios", "listar recordatorio"):
+            res = (
+                supabase.table("recordatorios")
+                .select("id, texto")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
+            )
+            rows = res.data or []
+            if not rows:
+                resp.message("⏰ Aún sin recordatorios.")
+            else:
+                lista = "\n".join([f"{i+1}. {r['texto']}" for i, r in enumerate(rows)])
+                resp.message("⏰ Tus recordatorios:\n" + lista)
+            return str(resp), 200
+
+        # Borrar recordatorio N
+        if text.startswith("borrar recordatorio"):
+            n_str = norm(text.replace("borrar recordatorio", "", 1))
+            if not n_str.isdigit():
+                resp.message("❌ Formato: *borrar recordatorio N* (ej: borrar recordatorio 2)")
+                return str(resp), 200
+
+            res = (
+                supabase.table("recordatorios")
+                .select("id")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
+            )
+            rows = res.data or []
+            n = int(n_str)
+            if n < 1 or n > len(rows):
+                resp.message("❌ Ese número de recordatorio no existe.")
+                return str(resp), 200
+
+            rec_id = rows[n - 1]["id"]
+            supabase.table("recordatorios").delete().eq("id", rec_id).execute()
+            resp.message(f"🗑️ Recordatorio {n} borrado.")
+            return str(resp), 200
+
+        # Editar recordatorio N: nuevo texto
+        if text.startswith("editar recordatorio"):
+            resto = norm(incoming[len("editar recordatorio") :])
+            partes = resto.split(":", 1)
+            if len(partes) != 2:
+                resp.message("❌ Formato: *editar recordatorio N: nuevo texto*")
+                return str(resp), 200
+
+            n_str, nuevo = norm(partes[0]), norm(partes[1])
+            if not n_str.isdigit() or not nuevo:
+                resp.message("❌ Formato: *editar recordatorio N: nuevo texto*")
+                return str(resp), 200
+
+            res = (
+                supabase.table("recordatorios")
+                .select("id")
+                .eq("user_id", wa_id)
+                .order("created_at")
+                .execute()
+            )
+            rows = res.data or []
+            n = int(n_str)
+            if n < 1 or n > len(rows):
+                resp.message("❌ Ese número de recordatorio no existe.")
+                return str(resp), 200
+
+            rec_id = rows[n - 1]["id"]
+            supabase.table("recordatorios").update({"texto": nuevo}).eq("id", rec_id).execute()
+            resp.message(f"✍️ Recordatorio {n} editado: {nuevo}")
+            return str(resp), 200
+
+        # Default
         resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
+        return str(resp), 200
 
     except Exception as e:
         print("⚠️ Error en webhook:", e)
         resp.message("⚠️ Error interno")
-
-    return str(resp), 200
-
-    # --------- Comandos ----------
-    if mlow in ["ayuda", "help", "menu"]:
-        reply = HELP_TEXT
-
-    elif mlow.startswith("nota "):
-        contenido = msg[5:].strip()
-        if not contenido:
-            reply = "⚠️ Escribe algo después de 'nota'."
-        else:
-            insert_note(wa_id, contenido)
-            reply = f"✅ Nota guardada: {contenido}"
-
-    elif mlow == "listar notas":
-        data = list_notes(wa_id, only_active=True)
-        reply = format_notes(data)
-
-    elif mlow.startswith("listar #"):
-        tag = mlow.replace("listar", "", 1).strip()
-        tag = tag.lstrip("#").strip()
-        if not tag:
-            reply = "⚠️ Debes indicar una etiqueta, ej: *listar #casa*"
-        else:
-            data = list_notes_by_tag(wa_id, tag)
-            reply = format_notes(data)
-
-    elif mlow.startswith("buscar "):
-        q = msg[7:].strip()
-        if not q:
-            reply = "⚠️ Usa: *buscar texto*"
-        else:
-            data = search_notes(wa_id, q)
-            if not data:
-                reply = "Sin coincidencias."
-            else:
-                reply = "Coincidencias:\n" + format_notes(data)
-
-    elif mlow.startswith("borrar nota "):
-        # borrar nota N
-        idx_str = mlow.replace("borrar nota", "", 1).strip()
-        try:
-            n = int(idx_str)
-            ok, err = delete_note_by_index(wa_id, n)
-            reply = "🗑️ Nota borrada." if ok else f"⚠️ {err}"
-        except Exception:
-            reply = "⚠️ Formato: *borrar nota 2*"
-
-    elif mlow.startswith("editar nota "):
-        # editar nota N: nuevo texto
-        m = re.match(r"editar nota\s+(\d+)\s*:\s*(.+)$", msg, flags=re.IGNORECASE)
-        if not m:
-            reply = "⚠️ Formato: *editar nota 2: nuevo texto*"
-        else:
-            n = int(m.group(1))
-            new_text = m.group(2).strip()
-            res, err = update_note_text_by_index(wa_id, n, new_text)
-            reply = "✏️ Nota actualizada." if not err else f"⚠️ {err}"
-
-    elif mlow.startswith("archivar nota "):
-        idx_str = mlow.replace("archivar nota", "", 1).strip()
-        try:
-            n = int(idx_str)
-            ok, err = set_archived_by_index(wa_id, n, archived=True)
-            reply = "📦 Nota archivada." if ok else f"⚠️ {err}"
-        except Exception:
-            reply = "⚠️ Formato: *archivar nota 1*"
-
-    elif mlow.startswith("desarchivar nota "):
-        idx_str = mlow.replace("desarchivar nota", "", 1).strip()
-        try:
-            n = int(idx_str)
-            ok, err = set_archived_by_index(wa_id, n, archived=False)
-            reply = "🗃️ Nota desarchivada." if ok else f"⚠️ {err}"
-        except Exception:
-            reply = "⚠️ Formato: *desarchivar nota 1*"
-
-    elif mlow == "stats":
-        total = supabase.table("notas").select("id", count="exact").eq("wa_id", wa_id).execute().count or 0
-        activas = (
-            supabase.table("notas")
-            .select("id", count="exact")
-            .eq("wa_id", wa_id)
-            .eq("archived", False)
-            .execute()
-            .count
-            or 0
-        )
-        reply = f"📊 Total: {total}\n🟢 Activas: {activas}\n📦 Archivadas: {total - activas}"
-
-    elif mlow in ["hola", "hi", "hey"]:
-        reply = "Hola 👋. Escribe *ayuda* para ver comandos."
-
-    else:
-        reply = "No te entendí. Escribe *ayuda* para ver comandos."
-
-    resp.message(reply)
-    return str(resp), 200
+        return str(resp), 200
 
 
-# ------------------------
-# Gunicorn entrypoint (Render)
-# ------------------------
 if __name__ == "__main__":
-    # Útil para correr local (no en Render)
-    app.run(host="0.0.0.0", port=5000)
+    # Útil para pruebas locales (Render usa Gunicorn/Procfile)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
