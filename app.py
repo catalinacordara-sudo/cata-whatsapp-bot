@@ -161,18 +161,38 @@ def root():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming = request.values.get("Body", "") or ""
-    wa_from = request.values.get("From", "") or ""       # ej: whatsapp:+614...
-    wa_id = request.values.get("WaId", "") or wa_from    # fallback
-    msg = norm(incoming)
-    mlow = msg.lower()
-
-    # Log en Render
-    print(f"Mensaje entrante: {msg} | from={wa_from}", flush=True)
-
-    # Respuesta Twilio
+    from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
-    reply = ""
+    try:
+        incoming = request.values.get("Body", "").strip().lower()
+        print("Mensaje entrante:", incoming)
+
+        if incoming == "ayuda":
+            resp.message("👋 Comandos disponibles:\n- nota <texto>\n- listar notas")
+        elif incoming.startswith("nota "):
+            texto = incoming.replace("nota ", "").strip()
+            # guardar nota en Supabase
+            supabase.table("notas").insert({"texto": texto}).execute()
+            resp.message(f"✅ Nota guardada: {texto}")
+        elif incoming.startswith("listar notas"):
+            data = supabase.table("notas").select("*").order("id").execute()
+            rows = data.data
+            if not rows:
+                resp.message("📒 No tienes notas todavía.")
+            else:
+                msg = "📒 Tus notas:\n"
+                for r in rows:
+                    msg += f"{r['id']}. {r['texto']}\n"
+                resp.message(msg)
+        else:
+            resp.message("Hola 👋. Escribe 'ayuda' para ver comandos.")
+
+    except Exception as e:
+        print("❌ Error en webhook:", e)
+        resp.message(f"⚠️ Error interno: {e}")
+
+    return str(resp), 200
+
 
     # --------- Comandos ----------
     if mlow in ["ayuda", "help", "menu"]:
