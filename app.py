@@ -159,94 +159,93 @@ def root():
     # Página de vida simple
     return "Echo debug: ping"
 @app.route("/webhook", methods=["POST"])
-def webhook():    
+def webhook():
     from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
+
     try:
-         incoming = request.values.get("Body", "").strip().lower()
-    resp = MessagingResponse()
+        incoming = request.values.get("Body", "").strip().lower()
+        print("Mensaje entrante:", incoming)
 
-    # === AYUDA / MENU ===
-    if incoming in ("ayuda", "help", "menu"):
-        resp.message(
-            "👋 *Comandos disponibles*\n"
-            "• *nota <texto>* — guarda una nota\n"
-            "• *listar notas* — ver notas\n"
-            "• *borrar nota N* — elimina por número\n"
-            "• *editar nota N: <nuevo texto>* — edita por número"
-        )
-        return str(resp), 200
-
-    # === GUARDAR NOTA ===
-    if incoming.startswith("nota "):
-        texto = incoming.replace("nota ", "", 1).strip()
-        if not texto:
-            resp.message("⚠️ Escribe algo después de *nota*.")
+        # === AYUDA / MENU ===
+        if incoming in ("ayuda", "help", "menu"):
+            resp.message(
+                "👋 *Comandos disponibles*\n"
+                "*nota <texto>* — guarda una nota\n"
+                "*listar notas* — ver notas\n"
+                "*borrar nota N* — elimina por número\n"
+                "*editar nota N: <nuevo texto>* — edita por número"
+            )
             return str(resp), 200
 
-        supabase.table("notas").insert({"texto": texto}).execute()
-        resp.message(f"✅ Nota guardada: {texto}")
-        return str(resp), 200
-
-    # === LISTAR NOTAS ===
-    if incoming == "listar notas":
-        res = supabase.table("notas").select("*").order("created_at", desc=False).execute()
-        rows = res.data or []
-        if not rows:
-            resp.message("📒 Aún sin notas.")
-        else:
-            lista = "\n".join([f"{i+1}. {r['texto']}" for i, r in enumerate(rows)])
-            resp.message(f"📒 *Tus notas:*\n{lista}")
-        return str(resp), 200
-
-    # === BORRAR NOTA N ===
-    if incoming.startswith("borrar nota"):
-        # soporta: "borrar nota 3"
-        idx_str = incoming.replace("borrar nota", "", 1).strip()
-        if not idx_str.isdigit():
-            resp.message("Formato: *borrar nota N* (ej. borrar nota 2)")
+        # === GUARDAR NOTA ===
+        if incoming.startswith("nota "):
+            texto = incoming.replace("nota ", "", 1).strip()
+            supabase.table("notas").insert({"texto": texto}).execute()
+            resp.message(f"✅ Nota guardada: {texto}")
             return str(resp), 200
 
-        n = int(idx_str)
-        res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
-        rows = res.data or []
-        if not (1 <= n <= len(rows)):
-            resp.message("Ese número de nota no existe.")
+        # === LISTAR NOTAS ===
+        if incoming.startswith("listar notas"):
+            res = supabase.table("notas").select("id, texto").order("created_at").execute()
+            rows = res.data or []
+            if not rows:
+                resp.message("📒 Aún sin notas.")
+            else:
+                lista = "\n".join([f"{i+1}. {r['texto']}" for i, r in enumerate(rows)])
+                resp.message(f"📒 Tus notas:\n{lista}")
             return str(resp), 200
 
-        note_id = rows[n-1]["id"]
-        supabase.table("notas").delete().eq("id", note_id).execute()
-        resp.message(f"🗑️ Nota {n} borrada.")
-        return str(resp), 200
+        # === BORRAR NOTA ===
+        if incoming.startswith("borrar nota"):
+            idx_str = incoming.replace("borrar nota", "", 1).strip()
+            if not idx_str.isdigit():
+                resp.message("❌ Formato: *borrar nota N* (ej: borrar nota 2)")
+                return str(resp), 200
 
-    # === EDITAR NOTA N: NUEVO TEXTO ===
-    if incoming.startswith("editar nota"):
-        # soporta: "editar nota 2: nuevo texto"
-        resto = incoming.replace("editar nota", "", 1).strip()
-        if ":" not in resto:
-            resp.message("Formato: *editar nota N: nuevo texto*")
-            return str(resp), 200
-        num_str, nuevo = resto.split(":", 1)
-        num_str = num_str.strip()
-        nuevo = nuevo.strip()
-        if not num_str.isdigit() or not nuevo:
-            resp.message("Formato: *editar nota N: nuevo texto*")
-            return str(resp), 200
+            n = int(idx_str)
+            res = supabase.table("notas").select("id").order("created_at").execute()
+            rows = res.data or []
+            if not (1 <= n <= len(rows)):
+                resp.message("❌ Ese número de nota no existe.")
+                return str(resp), 200
 
-        n = int(num_str)
-        res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
-        rows = res.data or []
-        if not (1 <= n <= len(rows)):
-            resp.message("Ese número de nota no existe.")
+            note_id = rows[n-1]["id"]
+            supabase.table("notas").delete().eq("id", note_id).execute()
+            resp.message(f"🗑️ Nota {n} borrada.")
             return str(resp), 200
 
-        note_id = rows[n-1]["id"]
-        supabase.table("notas").update({"texto": nuevo}).eq("id", note_id).execute()
-        resp.message(f"✏️ Nota {n} actualizada.")
-        return str(resp), 200
+        # === EDITAR NOTA ===
+        if incoming.startswith("editar nota"):
+            partes = incoming.replace("editar nota", "", 1).strip().split(":", 1)
+            if len(partes) != 2:
+                resp.message("❌ Formato: *editar nota N: nuevo texto*")
+                return str(resp), 200
 
-    # === DEFAULT ===
-    resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
+            idx_str, nuevo_texto = partes[0].strip(), partes[1].strip()
+            if not idx_str.isdigit():
+                resp.message("❌ Número inválido.")
+                return str(resp), 200
+
+            n = int(idx_str)
+            res = supabase.table("notas").select("id").order("created_at").execute()
+            rows = res.data or []
+            if not (1 <= n <= len(rows)):
+                resp.message("❌ Ese número de nota no existe.")
+                return str(resp), 200
+
+            note_id = rows[n-1]["id"]
+            supabase.table("notas").update({"texto": nuevo_texto}).eq("id", note_id).execute()
+            resp.message(f"✏️ Nota {n} editada: {nuevo_texto}")
+            return str(resp), 200
+
+        # === SI NO ENTIENDE ===
+        resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
+
+    except Exception as e:
+        print("⚠️ Error en webhook:", e)
+        resp.message("⚠️ Error interno")
+
     return str(resp), 200
 
     # --------- Comandos ----------
