@@ -1,31 +1,58 @@
 import os
-from flask import Flask, request
+from flask import Flask, request, Response
 from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
 
-# Endpoint de salud
-@app.route("/", methods=["GET"])
-def index():
-    return "OK", 200
+# ---------- util ----------
+def twiml(text: str) -> str:
+    resp = MessagingResponse()
+    resp.message(text)
+    return str(resp)
 
-# Ruta del webhook de Twilio
+# ---------- rutas ----------
+@app.route("/", methods=["GET"])
+def root():
+    return "ok", 200
+
+@app.route("/debug", methods=["GET"])
+def debug():
+    body = request.args.get("Body", "").strip()
+    if not body:
+        body = "(sin Body)"
+    return Response(twiml(f"Echo debug: {body}"), mimetype="text/xml")
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming_msg = request.values.get("Body", "").strip().lower()
-    resp = MessagingResponse()
+    incoming = (request.values.get("Body", "") or "").strip()
+    print(f"💬 Mensaje entrante: {incoming}", flush=True)
 
-    # Lógica de notas simple
-    if incoming_msg.startswith("nota"):
-        contenido = incoming_msg.replace("nota", "", 1).strip()
+    if not incoming:
+        return Response(twiml("No entendí. Escribe 'ayuda'."), mimetype="text/xml")
+
+    msg = incoming.lower()
+
+    if msg == "ayuda":
+        texto = (
+            "👋 *Comandos disponibles*\n"
+            "• nota <texto> — guarda una nota (demo)\n"
+            "• listar notas — ver notas (demo)\n"
+            "• ayuda — muestra este menú"
+        )
+        return Response(twiml(texto), mimetype="text/xml")
+
+    if msg.startswith("nota "):
+        contenido = incoming[5:].strip()
         if contenido:
-            resp.message(f"✔️ Nota guardada: {contenido}")
-        else:
-            resp.message("❗ No escribiste nada después de 'nota'.")
-    elif incoming_msg == "listar notas":
-        # aquí iría la lógica para listar notas
-        resp.message("No tienes notas todavía.")
-    else:
-        resp.message("Hola, soy tu Catabot. Usa 'nota <texto>' para guardar notas.")
+            return Response(twiml(f"✅ Nota guardada: {contenido}"), mimetype="text/xml")
+        return Response(twiml("❗ Escribe algo después de 'nota'."), mimetype="text/xml")
 
-    return str(resp), 200
+    if msg == "listar notas":
+        return Response(twiml("📒 Aún sin notas (demo)."), mimetype="text/xml")
+
+    return Response(twiml("Hola 👋. Escribe 'ayuda' para ver comandos."), mimetype="text/xml")
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
