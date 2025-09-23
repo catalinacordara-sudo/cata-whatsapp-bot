@@ -158,9 +158,7 @@ def format_notes(data):
 def root():
     # Página de vida simple
     return "Echo debug: ping"
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
+    
     from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
     try:
