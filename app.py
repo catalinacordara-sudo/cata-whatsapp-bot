@@ -1,20 +1,31 @@
-from flask import Flask, request, Response
+import os
+from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
 
-@app.route("/webhook", methods=["GET", "POST"])
+# Endpoint de salud
+@app.route("/", methods=["GET"])
+def index():
+    return "OK", 200
+
+# Ruta del webhook de Twilio
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    incoming = (request.values.get("Body", "") or "").strip()
-    print(f"💬 Mensaje entrante: {incoming}", flush=True)
-
+    incoming_msg = request.values.get("Body", "").strip().lower()
     resp = MessagingResponse()
-    if request.method == "GET":
-        resp.message("Webhook OK (GET) ✅")
-    else:
-        if incoming:
-            resp.message(f"Eco: {incoming}")
-        else:
-            resp.message("Recibí tu mensaje ✅")
 
-    return Response(str(resp), mimetype="application/xml")
+    # Lógica de notas simple
+    if incoming_msg.startswith("nota"):
+        contenido = incoming_msg.replace("nota", "", 1).strip()
+        if contenido:
+            resp.message(f"✔️ Nota guardada: {contenido}")
+        else:
+            resp.message("❗ No escribiste nada después de 'nota'.")
+    elif incoming_msg == "listar notas":
+        # aquí iría la lógica para listar notas
+        resp.message("No tienes notas todavía.")
+    else:
+        resp.message("Hola, soy tu Catabot. Usa 'nota <texto>' para guardar notas.")
+
+    return str(resp), 200
