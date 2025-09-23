@@ -164,34 +164,90 @@ def webhook():
     from twilio.twiml.messaging_response import MessagingResponse
     resp = MessagingResponse()
     try:
-        incoming = request.values.get("Body", "").strip().lower()
-        print("Mensaje entrante:", incoming)
+         incoming = request.values.get("Body", "").strip().lower()
+    resp = MessagingResponse()
 
-        # 👇 Aquí pegas todos los if/elif que te pasé:
-        if incoming in ["ayuda", "help", "menu"]:
-            resp.message("👋 Comandos disponibles...\n...")
+    # === AYUDA / MENU ===
+    if incoming in ("ayuda", "help", "menu"):
+        resp.message(
+            "👋 *Comandos disponibles*\n"
+            "• *nota <texto>* — guarda una nota\n"
+            "• *listar notas* — ver notas\n"
+            "• *borrar nota N* — elimina por número\n"
+            "• *editar nota N: <nuevo texto>* — edita por número"
+        )
+        return str(resp), 200
 
-        elif incoming.startswith("nota "):
-            texto = incoming.replace("nota ", "", 1).strip()
-            supabase.table("nota").insert({"texto": texto}).execute()
-            resp.message(f"✅ Nota guardada: {texto}")
+    # === GUARDAR NOTA ===
+    if incoming.startswith("nota "):
+        texto = incoming.replace("nota ", "", 1).strip()
+        if not texto:
+            resp.message("⚠️ Escribe algo después de *nota*.")
+            return str(resp), 200
 
-        elif incoming == "listar notas":
-            # etc...
+        supabase.table("notas").insert({"texto": texto}).execute()
+        resp.message(f"✅ Nota guardada: {texto}")
+        return str(resp), 200
 
-        elif incoming.startswith("borrar nota"):
-            # etc...
-
-        elif incoming.startswith("editar nota"):
-            # etc...
-
+    # === LISTAR NOTAS ===
+    if incoming == "listar notas":
+        res = supabase.table("notas").select("*").order("created_at", desc=False).execute()
+        rows = res.data or []
+        if not rows:
+            resp.message("📒 Aún sin notas.")
         else:
-            resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
+            lista = "\n".join([f"{i+1}. {r['texto']}" for i, r in enumerate(rows)])
+            resp.message(f"📒 *Tus notas:*\n{lista}")
+        return str(resp), 200
 
-    except Exception as e:
-        print("❌ Error en webhook:", e)
-        resp.message("⚠️ Error interno")
+    # === BORRAR NOTA N ===
+    if incoming.startswith("borrar nota"):
+        # soporta: "borrar nota 3"
+        idx_str = incoming.replace("borrar nota", "", 1).strip()
+        if not idx_str.isdigit():
+            resp.message("Formato: *borrar nota N* (ej. borrar nota 2)")
+            return str(resp), 200
 
+        n = int(idx_str)
+        res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
+        rows = res.data or []
+        if not (1 <= n <= len(rows)):
+            resp.message("Ese número de nota no existe.")
+            return str(resp), 200
+
+        note_id = rows[n-1]["id"]
+        supabase.table("notas").delete().eq("id", note_id).execute()
+        resp.message(f"🗑️ Nota {n} borrada.")
+        return str(resp), 200
+
+    # === EDITAR NOTA N: NUEVO TEXTO ===
+    if incoming.startswith("editar nota"):
+        # soporta: "editar nota 2: nuevo texto"
+        resto = incoming.replace("editar nota", "", 1).strip()
+        if ":" not in resto:
+            resp.message("Formato: *editar nota N: nuevo texto*")
+            return str(resp), 200
+        num_str, nuevo = resto.split(":", 1)
+        num_str = num_str.strip()
+        nuevo = nuevo.strip()
+        if not num_str.isdigit() or not nuevo:
+            resp.message("Formato: *editar nota N: nuevo texto*")
+            return str(resp), 200
+
+        n = int(num_str)
+        res = supabase.table("notas").select("id").order("created_at", desc=False).execute()
+        rows = res.data or []
+        if not (1 <= n <= len(rows)):
+            resp.message("Ese número de nota no existe.")
+            return str(resp), 200
+
+        note_id = rows[n-1]["id"]
+        supabase.table("notas").update({"texto": nuevo}).eq("id", note_id).execute()
+        resp.message(f"✏️ Nota {n} actualizada.")
+        return str(resp), 200
+
+    # === DEFAULT ===
+    resp.message("No te entendí. Escribe *ayuda* para ver comandos.")
     return str(resp), 200
 
     # --------- Comandos ----------
